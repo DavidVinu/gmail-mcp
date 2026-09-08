@@ -1,0 +1,64 @@
+# User unit for the HTTP entry point.
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp systemd/gmail-mcp.service ~/.config/systemd/user/
+#   # adjust WorkingDirectory and ExecStart to where you cloned this
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now gmail-mcp.service
+#
+# For the service to survive a reboot without anyone logging in:
+#   sudo loginctl enable-linger "$USER"
+#
+# Measured on 2026-09-08, one directive at a time against a live user
+# manager, because the list that fails is not the one you would guess:
+#
+#   ProtectClock=yes           -> 218/CAPABILITIES
+#   CapabilityBoundingSet=     -> 218/CAPABILITIES
+#   MemoryDenyWriteExecute=yes -> node core-dumps with SIGTRAP: the JIT needs
+#                                 pages that are writable and executable
+#
+# Measure such directives against the REAL binary, never against /bin/true.
+# The first pass here used /bin/true, which does not JIT, so
+# MemoryDenyWriteExecute looked harmless and took the service down on the
+# next start.
+#
+# Everything below this comment starts fine in a --user manager, including
+# ProtectSystem=strict and ProtectHome=read-only. Do not add the three above
+# back without re-measuring; a unit that refuses to start is worse than one
+# directive less.
+
+[Unit]
+Description=Gmail MCP over HTTP (loopback only)
+Documentation=https://github.com/DavidVinu/gmail-mcp
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/code/gmail-mcp
+# Absolut, nicht ueber die Shebang: eine Unit hat kaum PATH,
+# und `/usr/bin/env node` findet dann nichts.
+ExecStart=%h/.local/bin/node %h/code/gmail-mcp/src/http.mjs
+Restart=always
+RestartSec=5
+
+# The token file location; see README.
+Environment=GMAIL_MCP_TOKEN_FILE=%h/.config/gmail-mcp/http-token
+Environment=GMAIL_MCP_PORT=18791
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+# Two places, and no more: the attachment quarantine, and the account store
+# where finish_account_auth writes a refresh token. ProtectHome=read-only makes
+# everything else in the home unwritable, which is the point.
+ReadWritePaths=%h/.local/share/gmail-mcp
+ReadWritePaths=%h/.config/gmail-mcp
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=default.target
