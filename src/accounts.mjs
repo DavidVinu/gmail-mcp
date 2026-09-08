@@ -70,7 +70,16 @@ export async function ladeKlient(wurzel) {
   if (!q.client_id || !q.client_secret) {
     throw new Error(`${p}: client_id and client_secret required.`);
   }
-  return { id: q.client_id, secret: q.client_secret };
+  // The redirect must match what Google has registered for this client, to
+  // the character, or the consent screen answers redirect_uri_mismatch. The
+  // client file states it, so take it from there rather than guessing: a
+  // Desktop client is registered as bare `http://localhost`, and a hard-coded
+  // port and path would be wrong for every one of them.
+  return {
+    id: q.client_id,
+    secret: q.client_secret,
+    umleitung: Array.isArray(q.redirect_uris) ? q.redirect_uris[0] : undefined,
+  };
 }
 
 export async function listeKonten(wurzel) {

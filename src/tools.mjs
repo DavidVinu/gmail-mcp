@@ -37,10 +37,10 @@ export function loeseKonfig(env = process.env) {
     wurzel: konfigWurzel(env),
     anhangVerzeichnis: env.GMAIL_MCP_ATTACHMENT_DIR
       || path.join(env.HOME ?? '', '.local/share/gmail-mcp/attachments'),
-    // The redirect the OAuth client is registered with. Loopback is the right
-    // default for a desktop client; a remote instance needs a value that the
-    // person doing the authorising can actually reach.
-    umleitung: env.GMAIL_MCP_REDIRECT_URI || 'http://localhost:8765/oauth2callback',
+    // Only a fallback. The value the client file itself states wins, because
+    // that is the one Google has registered; see ladeKlient. This is what
+    // applies when the file names none.
+    umleitung: env.GMAIL_MCP_REDIRECT_URI || 'http://localhost',
   };
 }
 
@@ -132,7 +132,7 @@ export function registriere(server, konfig = loeseKonfig()) {
       const url = new URL(AUTH_ENDPUNKT);
       for (const [k, v] of Object.entries({
         client_id: klient.id,
-        redirect_uri: konfig.umleitung,
+        redirect_uri: klient.umleitung ?? konfig.umleitung,
         response_type: 'code',
         scope: SCOPES.join(' '),
         access_type: 'offline',
@@ -164,7 +164,8 @@ export function registriere(server, konfig = loeseKonfig()) {
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({
           client_id: klient.id, client_secret: klient.secret, code,
-          grant_type: 'authorization_code', redirect_uri: konfig.umleitung,
+          grant_type: 'authorization_code',
+          redirect_uri: klient.umleitung ?? konfig.umleitung,
         }).toString(),
       });
       const text = await antwort.text();

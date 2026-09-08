@@ -3,14 +3,31 @@
   "version": "1.0.0",
   "description": "A read-and-draft-only MCP server for several Gmail accounts in one instance. No send tool, no delete tool.",
   "license": "MIT",
+  "author": "David Vinu",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DavidVinu/gmail-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/DavidVinu/gmail-mcp/issues"
+  },
+  "homepage": "https://github.com/DavidVinu/gmail-mcp#readme",
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "bin": {
     "gmail-mcp": "./src/stdio.mjs",
     "gmail-mcp-http": "./src/http.mjs"
   },
-  "scripts": { "test": "node --test" },
-  "keywords": ["mcp", "gmail", "claude"],
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "mcp",
+    "gmail",
+    "claude"
+  ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
     "google-auth-library": "^9.15.1",

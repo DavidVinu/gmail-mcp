@@ -68,6 +68,37 @@ test('If the original cannot be read, no draft is created', async () => {
   assert.ok(!netz.some((r) => r.method === 'POST' && r.url.includes('/drafts')));
 });
 
+// ------------------------------------------------------- redirect uri -----
+
+test('The redirect comes from the client file, not from a guess', async () => {
+  // Google answers redirect_uri_mismatch unless this matches, to the
+  // character, what is registered for the client. A Desktop client is
+  // registered as bare `http://localhost`; a hard-coded port and path would be
+  // wrong for every one of them, and the failure appears on the consent
+  // screen where it is least convenient to debug.
+  // Deliberately NOT the fallback value: a client file that happens to agree
+  // with the default would make this case pass no matter where the value came
+  // from, which is how a test ends up proving nothing.
+  const REGISTRIERT = 'http://localhost:9876/oauth2callback';
+  const wurzel = konfigWurzel('umleitung');
+  fs.writeFileSync(path.join(wurzel, 'oauth-client.json'), JSON.stringify({
+    installed: { client_id: 'x', client_secret: 'y',
+      redirect_uris: [REGISTRIERT] } }), { mode: 0o600 });
+  const { antworten } = await rufe(
+    [werkzeug('begin_account_auth', { account: 'neu' })], { wurzel });
+  const url = new URL(daten(antworten, 2).consent_url);
+  assert.equal(url.searchParams.get('redirect_uri'), REGISTRIERT);
+  assert.equal(url.origin + url.pathname,
+    'https://accounts.google.com/o/oauth2/v2/auth');
+  // Offline access with a forced consent, or Google returns no refresh token
+  // on a repeat grant and the account dies silently an hour later.
+  assert.equal(url.searchParams.get('access_type'), 'offline');
+  assert.equal(url.searchParams.get('prompt'), 'consent');
+  assert.equal(url.searchParams.get('scope'),
+    'https://www.googleapis.com/auth/gmail.readonly '
+    + 'https://www.googleapis.com/auth/gmail.compose');
+});
+
 // ---------------------------------------------------- header injection -----
 
 test('A line break in a header is refused, not stripped', async () => {

@@ -77,9 +77,26 @@ Ask the assistant, or call the tools directly:
 
 1. `begin_account_auth` with `account: "privat"` — a short id you choose.
    It returns a Google consent URL.
-2. Open the URL **as the owner of that mailbox**, approve, and copy the
-   `code=…` value from the address bar you are redirected to.
-3. `finish_account_auth` with the same `account` and that `code`.
+2. Open the URL **as the owner of that mailbox** and approve.
+3. **Your browser will then show an error** — "This site can't be reached",
+   "connection refused", or a blank page. **That is expected and is not a
+   failure.** Nothing listens on the redirect address; the part that matters is
+   in the address bar:
+
+   ```
+   http://localhost/?state=privat&code=4/0AX4X...&scope=...
+                                  ^^^^^^^^^^^^^^ this
+   ```
+
+   Copy the value of `code=`, up to the next `&`.
+4. `finish_account_auth` with the same `account` and that `code`. The code is
+   single-use and expires within minutes, so do this straight away; if it
+   fails, start again at step 1.
+
+The redirect address is taken from your client file, because it has to match
+what Google registered for that client to the character — a mismatch shows up
+as `redirect_uri_mismatch` on the consent screen. `GMAIL_MCP_REDIRECT_URI` only
+applies if the file names none.
 
 The refresh token is written to `~/.config/gmail-mcp/accounts/<id>/token.json`
 with mode `0600` in a `0700` directory, atomically. The account's address is
@@ -136,7 +153,7 @@ of retrying a session that a restart threw away.
 | - | - |
 | `GMAIL_MCP_CONFIG_DIR` | `~/.config/gmail-mcp` |
 | `GMAIL_MCP_ATTACHMENT_DIR` | `~/.local/share/gmail-mcp/attachments` |
-| `GMAIL_MCP_REDIRECT_URI` | `http://localhost:8765/oauth2callback` |
+| `GMAIL_MCP_REDIRECT_URI` | the client file's own value, else `http://localhost` |
 | `GMAIL_MCP_TOKEN_FILE` | `~/.config/gmail-mcp/http-token` (HTTP only) |
 | `GMAIL_MCP_PORT` | `18791` (HTTP only) |
 | `GMAIL_MCP_ADDRESS` | `127.0.0.1` (HTTP only) |
@@ -165,7 +182,7 @@ correctly.
 npm test
 ```
 
-40 cases, no network and no Google account required: global `fetch` is replaced
+41 cases, no network and no Google account required: global `fetch` is replaced
 via `node --import`, so the production build has no switch for redirecting its
 own outbound door. Four mutations are checked by hand and each is caught by
 exactly one case — recipient rule off, send path allowed, header check removed,

@@ -43,10 +43,10 @@ test('The source tree contains no URL outside the three Google hosts', () => {
     // The readiness line of the HTTP entry point, describing the LOCAL bind.
     // It is a log message, never a request target, and `hole` would refuse it.
     'http://${ADDRESS}:${port}/mcp',
-    // The OAuth redirect. It is handed TO Google as a parameter and is never
-    // a request target of this server; the loopback default is the right one
-    // for a desktop client. Overridable with GMAIL_MCP_REDIRECT_URI.
-    'http://localhost:8765/oauth2callback',
+    // The OAuth redirect fallback. It is handed TO Google as a parameter and
+    // is never a request target of this server. The real value comes from the
+    // client file; this applies only when that file names none.
+    'http://localhost',
   ];
   const gefunden = new Set();
   for (const datei of fs.readdirSync(path.join(REPO, 'src'))) {
