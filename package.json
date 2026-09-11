@@ -2,7 +2,7 @@
   "name": "gmail-mcp",
   "version": "1.0.0",
   "description": "A read-and-draft-only MCP server for several Gmail accounts in one instance. No send tool, no delete tool.",
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "author": "David Vinu",
   "repository": {
     "type": "git",
