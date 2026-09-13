@@ -42,8 +42,18 @@ export const pfade = (wurzel, id) => ({
  * readable between write and chmod.
  */
 export async function schreibeGeheim(datei, inhalt) {
+  // Jede angelegte Ebene haerten, nicht nur die unterste. `mkdir` wendet den
+  // mode nur auf Verzeichnisse an, die es selbst anlegt, und `chmod` auf dem
+  // dirname erreicht die Zwischenebene nicht: ein bereits vorhandenes
+  // `accounts/` behaelt seine Umask-Rechte. Am 13.09.2026 auf der echten
+  // Maschine gefunden - 775, und darin sollen Refresh-Token liegen.
+  const teile = [];
+  for (let d = path.dirname(datei); d && d !== path.dirname(d); d = path.dirname(d)) {
+    teile.unshift(d);
+    if (path.basename(d) === 'gmail-mcp' || teile.length > 4) break;
+  }
   await mkdir(path.dirname(datei), { recursive: true, mode: 0o700 });
-  await chmod(path.dirname(datei), 0o700).catch(() => {});
+  for (const d of teile) await chmod(d, 0o700).catch(() => {});
   const tmp = `${datei}.${process.pid}.tmp`;
   await writeFile(tmp, inhalt, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
   await chmod(tmp, 0o600);

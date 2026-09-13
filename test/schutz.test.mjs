@@ -176,6 +176,24 @@ test('Secrets are written 0600 in a 0700 directory', async () => {
   assert.deepEqual(fs.readdirSync(d), ['token.json']);
 });
 
+test('Every directory level is hardened, not just the innermost', async () => {
+  // `mkdir` applies its mode only to directories it creates itself, and a
+  // chmod on the file's own dirname never touches the level above it. Found
+  // on the real machine 2026-09-13: `accounts/` sat at 775 while the account
+  // directories under it were 700 -- and refresh tokens were about to land
+  // there. A loose parent makes a tight child pointless.
+  const wurzel = path.join(tmp, 'ebenen');
+  fs.mkdirSync(path.join(wurzel, 'accounts'), { recursive: true, mode: 0o755 });
+  fs.chmodSync(path.join(wurzel, 'accounts'), 0o755);
+  await schreibeGeheim(path.join(wurzel, 'accounts', 'neu', 'token.json'), '{}\n');
+  for (const p of [path.join(wurzel, 'accounts'),
+                   path.join(wurzel, 'accounts', 'neu')]) {
+    assert.equal(fs.statSync(p).mode & 0o777, 0o700, p);
+  }
+  assert.equal(fs.statSync(path.join(wurzel, 'accounts', 'neu', 'token.json')).mode & 0o777,
+    0o600);
+});
+
 test('A token other users can read is refused, not used', async () => {
   // A refresh token does not expire. Whoever reads one has that mailbox until
   // the grant is revoked by hand, so a loose mode must stop the server rather
