@@ -182,11 +182,26 @@ correctly.
 npm test
 ```
 
-41 cases, no network and no Google account required: global `fetch` is replaced
+44 cases, no network and no Google account required: global `fetch` is replaced
 via `node --import`, so the production build has no switch for redirecting its
 own outbound door. Four mutations are checked by hand and each is caught by
 exactly one case — recipient rule off, send path allowed, header check removed,
 tokens written world-readable.
+
+One case is skipped unless you point it at the sibling server:
+
+```sh
+OTP_FILTER_SIBLING=/path/to/protonmail-mcp/src/otp-filter.mjs npm test
+```
+
+`src/otp-filter.mjs` is a deliberate copy of the file in
+[protonmail-mcp](https://github.com/DavidVinu/protonmail-mcp), not a shared
+dependency: two servers, two deployments, two blast radii, so an edit for one
+cannot silently change the other. The price of that is drift, and drift in a
+filter is invisible until a code reaches a model. So the copies are compared by
+**behaviour** rather than by text -- part of the divergence is intended, since
+Gmail identifies messages by opaque hex strings where IMAP uses decimal UIDs.
+`scrub` and `STRUCTURAL_FIELDS` are excluded for exactly that reason.
 
 ## Why this is not tszaks/gmail-multi-inbox-mcp
 
