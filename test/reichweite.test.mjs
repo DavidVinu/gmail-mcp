@@ -10,20 +10,31 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { REPO, rufe, werkzeug, antwortZu, daten, inhalt } from './helpers.mjs';
-import { SCOPES, gmailUrl, hole } from '../src/google.mjs';
+import { SCOPES, gmail, gmailUrl, hole } from '../src/google.mjs';
 
 // --------------------------------------------------------------- scopes ----
 
-test('The grant is read plus drafts, and nothing else', () => {
-  assert.deepEqual([...SCOPES].sort(), [
-    'https://www.googleapis.com/auth/gmail.compose',
-    'https://www.googleapis.com/auth/gmail.readonly',
+test('The grant is read, drafts and labels, and nothing else', () => {
+  // One scope, not three. gmail.modify is a superset of gmail.readonly and
+  // gmail.compose (users.drafts.create, users.messages.modify and
+  // users.messages.get all accept it), so asking for the other two as well
+  // would advertise a narrowness that does not exist.
+  assert.deepEqual([...SCOPES], [
+    'https://www.googleapis.com/auth/gmail.modify',
   ]);
-  for (const verboten of ['mail.google.com', 'gmail.send', 'gmail.modify',
-    'gmail.settings', 'auth/drive', 'spreadsheets', 'documents', 'calendar']) {
+  // gmail.modify is deliberately NOT on this list any more -- David widened
+  // the grant on 2026-09-21 so the mail triage can mark Gmail as read. What
+  // stays forbidden is everything that the widening did not require: the full
+  // mailbox scope (permanent deletion bypassing the trash), settings (which
+  // can create forwarding addresses and filters), and every other product.
+  for (const verboten of ['mail.google.com', 'gmail.settings', 'gmail.insert',
+    'auth/drive', 'spreadsheets', 'documents', 'calendar', 'contacts']) {
     assert.ok(!SCOPES.some((s) => s.includes(verboten)),
       `scope ${verboten} must not be requested`);
   }
+  // A second scope creeping in later is a change worth failing on, whatever
+  // it is: the consent screen is the one place the user sees this grant.
+  assert.equal(SCOPES.length, 1, 'the grant is one scope; adding a second is a decision');
 });
 
 // ------------------------------------------------------- outbound hosts ----
@@ -47,6 +58,9 @@ test('The source tree contains no URL outside the three Google hosts', () => {
     // is never a request target of this server. The real value comes from the
     // client file; this applies only when that file names none.
     'http://localhost',
+    // The scope this server requests. It is handed TO Google in the consent
+    // URL and is never a request target; the grant test above pins its value.
+    'https://www.googleapis.com/auth/gmail.modify',
   ];
   const gefunden = new Set();
   for (const datei of fs.readdirSync(path.join(REPO, 'src'))) {
@@ -123,8 +137,27 @@ test('gmailUrl refuses the send and settings paths outright', () => {
     'users/me/messages/send', 'users/me/drafts/abc/send', 'users/me/drafts/send',
     'users/me/settings/forwardingAddresses', 'users/me/settings/filters',
     'users/me/watch', 'users/me/stop',
+    // Reachable since the grant became gmail.modify. Defence in depth only --
+    // the boundary that actually holds is the closed flag map, because
+    // messages/modify with addLabelIds:['TRASH'] trashes a message without
+    // touching any of these paths. Both are tested; neither is trusted alone.
+    'users/me/messages/abc/trash', 'users/me/messages/abc/untrash',
+    'users/me/threads/t1/trash', 'users/me/messages/batchDelete',
   ]) {
     assert.throws(() => gmailUrl(pfad), /not reachable/, pfad);
+  }
+});
+
+test('the outbound door refuses the DELETE verb whatever the path', async () => {
+  // Gmail's drafts.delete and messages.delete are permanent, bypassing the
+  // trash. Refusing the verb closes the whole class at once.
+  for (const pfad of ['users/me/drafts/r1', 'users/me/messages/abc123',
+    'users/me/labels/Label_7']) {
+    await assert.rejects(
+      () => gmail('token', pfad, { method: 'DELETE' }, () => {
+        throw new Error('the guard let a DELETE through to fetch');
+      }),
+      /never deletes/, pfad);
   }
 });
 
@@ -148,7 +181,8 @@ test('The tool list contains no way to send, delete or share', async () => {
   }
   assert.deepEqual(namen, [
     'attachment_download', 'begin_account_auth', 'draft_create', 'draft_list',
-    'draft_read', 'draft_reply', 'finish_account_auth', 'labels_list',
+    'draft_read', 'draft_reply', 'finish_account_auth', 'flag_add',
+    'flag_remove', 'labels_list',
     'list_accounts', 'message_read', 'message_search', 'thread_read',
   ]);
 });

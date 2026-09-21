@@ -379,4 +379,56 @@ export function registriere(server, konfig = loeseKonfig()) {
       return ergebnis(await gmail(zugang, 'users/me/drafts',
         { method: 'POST', body: { message: { raw, threadId: original.threadId } } }));
     });
+
+  // ---------------------------------------------------------------- flags --
+  //
+  // THIS MAP IS THE BOUNDARY, not the path guard in google.mjs. Gmail changes
+  // labels through users.messages.modify, and `addLabelIds: ['TRASH']` would
+  // move a message to the trash without ever touching a /trash path. So no
+  // caller string may reach the label array: the tool takes a word from a
+  // closed enum, and only the value this map yields is ever sent.
+  //
+  // The vocabulary is Proton's (`seen`, `flagged`), not Gmail's, so a model
+  // driving both servers learns one word list. `answered` is deliberately
+  // absent -- Gmail has no such label, and inventing one would be a lie about
+  // what the mailbox knows.
+  //
+  // `seen` is INVERTED. Gmail marks unread mail with a label; read mail simply
+  // lacks it. So adding `seen` REMOVES the label, and removing `seen` adds it.
+  const FLAG_LABEL = { seen: 'UNREAD', flagged: 'STARRED' };
+  const INVERTIERT = new Set(['seen']);
+
+  const flagFeld = z.enum(Object.keys(FLAG_LABEL))
+    .describe('seen (read/unread) or flagged (starred). No other label can be '
+      + 'set through this server.');
+
+  /** Build the request body for one flag change, or throw. */
+  const flagKoerper = (flag, setzen) => {
+    const label = FLAG_LABEL[flag];
+    if (!label) throw new Error(`unknown flag ${JSON.stringify(flag)}`);
+    const anfuegen = INVERTIERT.has(flag) ? !setzen : setzen;
+    return anfuegen ? { addLabelIds: [label] } : { removeLabelIds: [label] };
+  };
+
+  const flagWerkzeug = (name, setzen, beschreibung) =>
+    werkzeug(name, beschreibung,
+      { account: kontoFeld, id: z.string().min(1), flag: flagFeld },
+      async ({ account, id, flag }) => {
+        const zugang = await zugangFuer(konfig, account);
+        return ergebnis(await gmail(zugang,
+          `users/me/messages/${encodeURIComponent(id)}/modify`,
+          { method: 'POST', body: flagKoerper(flag, setzen) }));
+      }, 'flag change');
+
+  flagWerkzeug('flag_add', true,
+    'Mark a message as read (seen) or starred (flagged). Nothing else can be '
+    + 'labelled, and nothing can be moved or deleted.');
+  flagWerkzeug('flag_remove', false,
+    'Mark a message as unread (seen) or unstarred (flagged). Same two flags '
+    + 'as flag_add.');
+
+  // Exported for the contract test: the boundary is worth measuring directly,
+  // not only through a tool call.
+  registriere.FLAG_LABEL = FLAG_LABEL;
+  registriere.flagKoerper = flagKoerper;
 }

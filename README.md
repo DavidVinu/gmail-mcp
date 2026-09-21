@@ -12,22 +12,35 @@ configured. Adding another account is an OAuth flow at runtime, not a redeploy.
 | | How it is prevented |
 | - | - |
 | Send | No send tool. No code path reaches `messages/send` or `drafts/*/send`, and `gmailUrl` refuses those paths outright. |
-| Delete | Not offered at all. Gmail's `drafts.delete` is permanent, so there is no delete tool of any kind. |
+| Delete | Not offered at all. Gmail's `drafts.delete` is permanent, so there is no delete tool of any kind, and the outbound door refuses the `DELETE` verb whatever the path. |
+| Trash | No tool offers it; `trash`, `untrash` and `batchDelete` are refused paths; and the flag map below is a closed list, so no caller string can become a label id. |
 | Change filters or forwarding | `gmail.settings.basic` is not requested, and `settings/` is a refused path. |
 | Touch Drive, Docs, Sheets, Calendar | Those scopes are not requested. |
 | Contact anything but Google | Three constant hosts, one outbound function, `redirect: 'error'`. A contract test scans the source for URL literals. |
 
 **One thing you must know, because it is a real limit and not a detail.**
-Google has **no draft-only scope**. `gmail.compose` is the narrowest scope that
-can create a draft, and at the API level it also permits sending. So the grant
-this server holds *could* send; the reason it cannot is that this server offers
-no send tool and no code path that reaches the send endpoint. That is the same
-shape of guarantee the Proton server gives, and it is worth stating plainly
-rather than implying that Google enforces it.
+Google has **no draft-only scope** and no modify-without-send scope for this
+kind of client. `gmail.modify` is what marking mail as read requires, and at
+the API level it also permits sending. So the grant this server holds *could*
+send; the reason it cannot is that this server offers no send tool and no code
+path that reaches the send endpoint. That is the same shape of guarantee the
+Proton server gives, and it is worth stating plainly rather than implying that
+Google enforces it. (`gmail.modify.restricted` exists and does exclude send,
+but it is for Workspace administrators using a service account with
+domain-wide delegation — not for a desktop client on consumer accounts.)
 
-The second consequence of staying narrow: **this server cannot mark anything as
-read.** Changing labels needs `gmail.modify`, which also grants send. That was
-the wrong trade, so reading leaves the mailbox untouched.
+**Why trash is the interesting case.** Gmail moves a message to the trash
+through `users.messages.modify` with `addLabelIds: ['TRASH']` — the same
+endpoint that marks mail as read. A path guard never sees it. So the boundary
+that actually holds is not the refused path but the **closed flag map**: the
+tool takes one word from a fixed enum (`seen`, `flagged`), and only the label
+id that map yields is ever sent. A contract test reads that enum from the
+*published* schema rather than a hand-written list, so a flag added later is
+exercised the moment it exists.
+
+`seen` is inverted, because Gmail labels unread mail rather than read mail:
+adding `seen` removes `UNREAD`, removing `seen` adds it. Both directions are
+pinned by a test.
 
 ## Requirements
 
@@ -46,11 +59,14 @@ This part cannot be automated — it is your account and your consent screen.
    - User type: **External** (unless every mailbox is in a Workspace you own,
      then Internal).
    - Fill in app name and your own address; nothing else is required.
-   - **Scopes:** add exactly these two, and no others:
+   - **Scopes:** add exactly this one, and no others:
      ```
-     https://www.googleapis.com/auth/gmail.readonly
-     https://www.googleapis.com/auth/gmail.compose
+     https://www.googleapis.com/auth/gmail.modify
      ```
+     One scope, not three: `gmail.modify` is a superset of `gmail.readonly`
+     and `gmail.compose` (`users.drafts.create`, `users.messages.modify` and
+     `users.messages.get` all accept it), so requesting the other two as well
+     would advertise a narrowness that does not exist.
    - **Test users:** add every Gmail address you intend to connect. While the
      app is in *Testing*, only listed addresses can authorise it, and refresh
      tokens expire after 7 days. For a permanent setup either publish the app
@@ -162,7 +178,13 @@ of retrying a session that a restart threw away.
 
 `list_accounts`, `begin_account_auth`, `finish_account_auth`, `labels_list`,
 `message_search`, `message_read`, `thread_read`, `draft_list`, `draft_read`,
-`draft_create`, `draft_reply`, `attachment_download`.
+`draft_create`, `draft_reply`, `attachment_download`, `flag_add`,
+`flag_remove`.
+
+`flag_add` and `flag_remove` take one word from a closed enum — `seen` or
+`flagged` — and nothing else. The vocabulary is the Proton server's rather
+than Gmail's, so an assistant driving both learns one word list; `answered`
+is deliberately absent because Gmail has no such label.
 
 ## One-time codes
 
@@ -182,11 +204,24 @@ correctly.
 npm test
 ```
 
-44 cases, no network and no Google account required: global `fetch` is replaced
+52 cases, no network and no Google account required: global `fetch` is replaced
 via `node --import`, so the production build has no switch for redirecting its
-own outbound door. Four mutations are checked by hand and each is caught by
-exactly one case — recipient rule off, send path allowed, header check removed,
-tokens written world-readable.
+own outbound door. Twelve mutations are checked by hand and each is caught —
+recipient rule off, send path allowed, header check removed, tokens written
+world-readable, a second scope added, the `DELETE` guard dropped, each of the
+three trash paths dropped, the `seen` inversion flipped, `STARRED` quietly
+changed to `TRASH`, and a `TRASH` entry added to the flag map.
+
+Two of those are worth repeating, because both slipped through first:
+
+- The flag test listed the flags by hand, so adding a *new* enum entry passed
+  untouched. It now reads the enum from the **published schema** instead, and
+  drives whatever it finds there.
+- Loosening the mode on the `writeFile` that stores a refresh token changed
+  nothing a state-based test could see, because an explicit `chmod` follows.
+  That mode is what closes the window in which the file exists and is readable
+  before the chmod lands, so holding it takes a look at the source — which is
+  what the case now does.
 
 One case is skipped unless you point it at the sibling server:
 

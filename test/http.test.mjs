@@ -204,7 +204,8 @@ test('The server offers the same twelve tools as stdio', async () => {
   const names = d.result.tools.map((x) => x.name).sort();
   assert.deepEqual(names, [
     'attachment_download', 'begin_account_auth', 'draft_create', 'draft_list',
-    'draft_read', 'draft_reply', 'finish_account_auth', 'labels_list',
+    'draft_read', 'draft_reply', 'finish_account_auth', 'flag_add',
+    'flag_remove', 'labels_list',
     'list_accounts', 'message_read', 'message_search', 'thread_read',
   ]);
   for (const forbidden of ['send', 'delete', 'trash', 'share', 'unsubscribe']) {

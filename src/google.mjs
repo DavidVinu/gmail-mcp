@@ -27,22 +27,39 @@ const ERLAUBTE_URSPRUENGE = new Set([
   'https://accounts.google.com',
 ]);
 
-// Read the mailbox, and create drafts. That is the whole grant.
+// Read the mailbox, create drafts, and change labels. That is the whole grant.
 //
-// Note what is NOT here: gmail.send, gmail.modify, gmail.settings.basic
-// (which can create forwarding addresses and filters -- a mail exfiltration
-// primitive), and anything touching Drive, Docs, Sheets or Calendar.
+// Note what is NOT here: gmail.settings.basic (which can create forwarding
+// addresses and filters -- a mail exfiltration primitive), the full
+// https://mail.google.com/ (which permits permanent deletion bypassing the
+// trash), and anything touching Drive, Docs, Sheets or Calendar.
+//
+// WHY ONE SCOPE AND NOT THREE. gmail.modify is a superset of gmail.readonly
+// and of gmail.compose: users.drafts.create, users.messages.modify and
+// users.messages.get all accept it (checked against the method reference,
+// 2026-09-21). Listing three scopes where one dominates advertises a
+// narrowness that does not exist, so the grant says what it is.
+//
+// WHAT WIDENING TO gmail.modify DID AND DID NOT CHANGE. It did NOT change
+// anything on the send axis: gmail.compose already permitted sending ("Manage
+// drafts and send emails" is Google's own wording), and this server already
+// carried the whole no-send guarantee itself. What it added is label
+// modification -- which is what marking mail as read requires -- and the
+// ability to move mail to the trash. The second is not wanted and is refused
+// three times over: no tool offers it, the flag map below is a closed list
+// that no caller string can reach, and the path and method guards refuse the
+// trash endpoints outright.
 //
 // An honest caveat that belongs in the code and not only in the README:
-// Google has no draft-only scope. `gmail.compose` is the narrowest scope that
-// can create a draft, and at the API level it also permits sending. The
-// guarantee that nothing is sent therefore lives in this server -- there is no
-// send tool and no code path that reaches messages/send -- exactly as it does
-// for the Proton server. Claiming otherwise would be claiming something Google
-// does not offer.
+// Google has no draft-only and no modify-without-send scope for this kind of
+// client. gmail.modify.restricted exists but is for Workspace administrators
+// using a service account with domain-wide delegation, not for a desktop
+// client on consumer accounts. The guarantee that nothing is sent therefore
+// lives in this server -- there is no send tool and no code path that reaches
+// messages/send -- exactly as it does for the Proton server. Claiming
+// otherwise would be claiming something Google does not offer.
 export const SCOPES = [
-  'https://www.googleapis.com/auth/gmail.readonly',
-  'https://www.googleapis.com/auth/gmail.compose',
+  'https://www.googleapis.com/auth/gmail.modify',
 ];
 
 /** Paths that must never be reachable, whatever a caller passes. */
@@ -53,6 +70,13 @@ const VERBOTENE_PFADE = [
   /(^|\/)settings\//i,
   /(^|\/)watch(\?|$)/i,
   /(^|\/)stop(\?|$)/i,
+  // Reachable since the grant became gmail.modify, and unwanted. Not the
+  // boundary that holds -- that is the closed flag map in tools.mjs, because
+  // messages/modify with addLabelIds:['TRASH'] would trash a message without
+  // ever touching one of these paths -- but cheap defence in depth.
+  /(^|\/)trash(\?|$)/i,
+  /(^|\/)untrash(\?|$)/i,
+  /(^|\/)batchDelete(\?|$)/i,
 ];
 
 /** Build a Gmail API URL, or refuse. */
@@ -115,6 +139,12 @@ export async function frischerZugang(klient, refreshToken, holen = fetch) {
 /** A Gmail API call with a bearer token. Returns parsed JSON. */
 export async function gmail(zugang, pfad, { suche, method = 'GET', body } = {},
   holen = fetch) {
+  // Gmail's drafts.delete and messages.delete are permanent, bypassing the
+  // trash. No tool here uses DELETE, so refusing the verb outright costs
+  // nothing and closes the whole class rather than one path at a time.
+  if (String(method).toUpperCase() === 'DELETE') {
+    throw new Error('refusing DELETE: this server never deletes anything');
+  }
   const url = gmailUrl(pfad, suche);
   const kopf = { authorization: `Bearer ${zugang}` };
   let koerper;

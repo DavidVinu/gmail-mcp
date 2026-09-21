@@ -10,7 +10,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import {
-  EIGENE, KONTO, antwortZu, daten, inhalt, konfigWurzel, rufe, tmp, werkzeug,
+  EIGENE, KONTO, REPO, antwortZu, daten, inhalt, konfigWurzel, rufe, tmp, werkzeug,
 } from './helpers.mjs';
 import { pruefeRechte, schreibeGeheim } from '../src/accounts.mjs';
 
@@ -94,9 +94,10 @@ test('The redirect comes from the client file, not from a guess', async () => {
   // on a repeat grant and the account dies silently an hour later.
   assert.equal(url.searchParams.get('access_type'), 'offline');
   assert.equal(url.searchParams.get('prompt'), 'consent');
+  // What the consent screen actually asks for. This is the one string the
+  // account holder sees, so it is pinned here as well as in reichweite.
   assert.equal(url.searchParams.get('scope'),
-    'https://www.googleapis.com/auth/gmail.readonly '
-    + 'https://www.googleapis.com/auth/gmail.compose');
+    'https://www.googleapis.com/auth/gmail.modify');
 });
 
 // ---------------------------------------------------- header injection -----
@@ -176,6 +177,22 @@ test('Secrets are written 0600 in a 0700 directory', async () => {
   assert.deepEqual(fs.readdirSync(d), ['token.json']);
 });
 
+test('the secret is created 0600, not widened and then narrowed', () => {
+  // An explicit chmod follows the write, so loosening the mode on writeFile
+  // leaves the FINAL state correct and a state-based test sees nothing -- a
+  // mutation doing exactly that slipped through on 2026-09-21. The mode on
+  // the write is what closes the window in which the file exists and is
+  // readable before the chmod lands, and the only way to hold it is to look
+  // at the source.
+  const quelle = fs.readFileSync(path.join(REPO, 'src/accounts.mjs'), 'utf8');
+  const schreiben = quelle.match(/writeFile\([^)]*\)/s);
+  assert.ok(schreiben, 'the secret is still written with writeFile');
+  assert.match(schreiben[0], /mode:\s*0o600/,
+    'the file must be created 0600, not widened and narrowed afterwards');
+  assert.match(schreiben[0], /flag:\s*'wx'/,
+    "'wx' refuses an existing file rather than adopting its mode");
+});
+
 test('Every directory level is hardened, not just the innermost', async () => {
   // `mkdir` applies its mode only to directories it creates itself, and a
   // chmod on the file's own dirname never touches the level above it. Found
@@ -236,4 +253,113 @@ test('An authorisation failure stays hard', async () => {
     { antworten: { 'oauth2.googleapis.com/token': { status: 400,
       body: { error: 'invalid_grant' } } } });
   assert.ok(antwortZu(antworten, 2).result?.isError);
+});
+
+// ------------------------------------------------------------- flags -------
+//
+// The grant became gmail.modify on 2026-09-21 so the mail triage can mark
+// Gmail as read. That one scope also permits moving mail to the trash, which
+// is NOT wanted. The boundary that holds is the closed flag map: Gmail trashes
+// through users.messages.modify with `addLabelIds: ['TRASH']`, so a path guard
+// alone would never see it. No caller string may reach the label array.
+
+/** Every label id this server sent, across all logged requests. */
+function gesendeteLabels(rufe_) {
+  const labels = [];
+  for (const r of rufe_) {
+    if (!r.body) continue;
+    let d;
+    try { d = JSON.parse(r.body); } catch { continue; }
+    for (const feld of ['addLabelIds', 'removeLabelIds']) {
+      if (Array.isArray(d[feld])) labels.push(...d[feld]);
+    }
+  }
+  return labels;
+}
+
+test('seen is inverted: marking read REMOVES the unread label', async () => {
+  const { rufe: netz } = await rufe(
+    [werkzeug('flag_add', { account: KONTO, id: 'abc123', flag: 'seen' })]);
+  const modify = netz.filter((r) => r.url.includes('/messages/abc123/modify'));
+  assert.equal(modify.length, 1, 'exactly one modify call');
+  assert.equal(modify[0].method, 'POST');
+  assert.deepEqual(JSON.parse(modify[0].body), { removeLabelIds: ['UNREAD'] });
+});
+
+test('and marking unread adds it back', async () => {
+  const { rufe: netz } = await rufe(
+    [werkzeug('flag_remove', { account: KONTO, id: 'abc123', flag: 'seen' })]);
+  const modify = netz.filter((r) => r.url.includes('/messages/abc123/modify'));
+  assert.equal(modify.length, 1);
+  assert.deepEqual(JSON.parse(modify[0].body), { addLabelIds: ['UNREAD'] });
+});
+
+test('flagged is not inverted', async () => {
+  const { rufe: netz } = await rufe(
+    [werkzeug('flag_add', { account: KONTO, id: 'abc123', flag: 'flagged' })]);
+  const modify = netz.filter((r) => r.url.includes('/modify'));
+  assert.deepEqual(JSON.parse(modify[0].body), { addLabelIds: ['STARRED'] });
+});
+
+test('no label a caller names can reach the request, TRASH least of all',
+  async () => {
+    // Each of these would be a different kind of damage: TRASH removes the
+    // message from the inbox, SPAM trains the filter against a sender, INBOX
+    // resurrects archived mail, and a Label_* id is someone else's category.
+    for (const versuch of ['TRASH', 'SPAM', 'INBOX', 'UNREAD', 'Label_7',
+      'seen,TRASH', 'STARRED']) {
+      const { antworten, rufe: netz } = await rufe(
+        [werkzeug('flag_add', { account: KONTO, id: 'abc123', flag: versuch })]);
+      const a = antwortZu(antworten, 2);
+      assert.ok(a?.error || a?.result?.isError,
+        `flag ${versuch} must be refused, not accepted`);
+      assert.deepEqual(gesendeteLabels(netz), [],
+        `flag ${versuch} must not reach the network`);
+    }
+  });
+
+test('the only labels this server can ever send are UNREAD and STARRED',
+  async () => {
+    // Read the enum from the PUBLISHED schema rather than listing the flags
+    // here. A hand-written list only exercises the flags it already knows, so
+    // a new entry in FLAG_LABEL would slip through untouched -- which is
+    // exactly what a mutation adding `weg: 'TRASH'` did to the first version
+    // of this test. Driving the server's own declared vocabulary means any
+    // added flag is exercised the moment it exists.
+    const { antworten: liste } = await rufe(
+      [{ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }]);
+    const werkzeuge = antwortZu(liste, 2).result.tools;
+    const flags = werkzeuge.find((w) => w.name === 'flag_add')
+      .inputSchema.properties.flag.enum;
+    assert.deepEqual([...flags].sort(), ['flagged', 'seen'],
+      'the published vocabulary is exactly these two flags');
+
+    const alle = [];
+    for (const name of ['flag_add', 'flag_remove']) {
+      for (const flag of flags) {
+        const { rufe: netz } = await rufe(
+          [werkzeug(name, { account: KONTO, id: 'abc123', flag })]);
+        alle.push(...gesendeteLabels(netz));
+      }
+    }
+    assert.deepEqual([...new Set(alle)].sort(), ['STARRED', 'UNREAD'],
+      'no other label id may ever leave this server');
+  });
+
+test('no tool call ever uses the DELETE verb', async () => {
+  const AUFRUFE = [
+    ['flag_add', { account: KONTO, id: 'abc123', flag: 'seen' }],
+    ['flag_remove', { account: KONTO, id: 'abc123', flag: 'flagged' }],
+    ['draft_create', { account: KONTO, to: 'a@x.org', subject: 'S', body: 'T' }],
+    ['draft_list', { account: KONTO }],
+  ];
+  for (const [name, args] of AUFRUFE) {
+    const { rufe: netz } = await rufe([werkzeug(name, args)]);
+    for (const r of netz) {
+      assert.notEqual(String(r.method).toUpperCase(), 'DELETE',
+        `${name} used DELETE on ${r.url}`);
+      assert.ok(!/\/(trash|untrash|batchDelete)(\?|$)/.test(r.url),
+        `${name} reached ${r.url}`);
+    }
+  }
 });
